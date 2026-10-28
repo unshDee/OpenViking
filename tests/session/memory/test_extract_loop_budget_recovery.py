@@ -112,9 +112,9 @@ def _make_loop(vlm, **kwargs):
     )
 
 
-async def _run_loop(loop):
+async def _run_loop(loop, output_format="python"):
     config = SimpleNamespace(
-        memory=SimpleNamespace(link_enabled=False, extraction_output_format="python")
+        memory=SimpleNamespace(link_enabled=False, extraction_output_format=output_format)
     )
     with (
         patch(
@@ -281,6 +281,40 @@ class TestTruncationDetection:
 
         with pytest.raises(RuntimeError, match="finish_reason='length'"):
             await _run_loop(loop)
+
+
+class TestJsonSchemaEcho:
+    """https://github.com/volcengine/OpenViking/issues/6715: a JSON-protocol model
+    that echoes the rendered schema is not a budget problem."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("content", "advice"),
+        [
+            (
+                '<think>ok</think>{"$defs": {"PreferencesOp": {"properties": {',
+                "repeated the JSON Schema",
+            ),
+            (
+                '```json\n{\n  "$defs": {"Op": {"type": "object"',
+                "repeated the JSON Schema",
+            ),
+            (
+                '{"preferences": [{"topic": "booking", "content": "The agent',
+                "Raise vlm.max_tokens",
+            ),
+        ],
+    )
+    async def test_truncated_json_output_names_its_cause(self, content, advice):
+        vlm = ScriptedVLM([_length_response(content=content)])
+        loop = _make_loop(vlm)
+
+        with pytest.raises(RuntimeError, match="output-token budget") as exc_info:
+            await _run_loop(loop, output_format="json")
+
+        assert advice in str(exc_info.value)
+        # Still terminal: no same-cap retry that would echo the schema again.
+        assert len(vlm.calls) == 1
 
 
 class TestNoTokenCounterInference:

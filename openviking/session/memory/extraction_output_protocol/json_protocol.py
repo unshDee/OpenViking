@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from openviking.session.memory.extraction_output_protocol import prompt_fragments as prompts
@@ -14,6 +15,10 @@ from openviking.session.memory.extraction_output_protocol.base import (
 )
 from openviking.session.memory.tools import add_tool_call_pair_to_messages
 from openviking.session.memory.utils import parse_json_with_stability
+
+# render_contract() shows model_json_schema(), whose first key is "$defs" for the
+# nested operations model. An operations object never has a "$"-prefixed key.
+_SCHEMA_ECHO_RE = re.compile(r'\A\s*(?:```(?:json)?\s*)?\{\s*"\$(?:defs|schema)"')
 
 
 class JsonExtractionOutputProtocol(ExtractionOutputProtocol):
@@ -93,6 +98,15 @@ class JsonExtractionOutputProtocol(ExtractionOutputProtocol):
             "Your previous output could not be parsed as valid JSON. "
             "Please output ONLY a valid JSON object matching the required schema. "
             "Do not include any explanation, markdown formatting, or text outside the JSON."
+        )
+
+    def describe_truncated_output(self, content: str) -> str | None:
+        if not _SCHEMA_ECHO_RE.match(content):
+            return None
+        return (
+            "The model repeated the JSON Schema from the output contract instead of "
+            "returning operations; raising vlm.max_tokens will not help. Use the default "
+            'memory.extraction_output_format="python" or a model that follows the JSON contract.'
         )
 
     def render_patch_repair(self, patch_errors: list[dict[str, Any]]) -> str:

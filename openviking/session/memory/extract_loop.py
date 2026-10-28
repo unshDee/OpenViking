@@ -404,11 +404,11 @@ class ExtractLoop:
             parse_error = self._last_parse_error
             # Add format error message if parse failed (max 1 retry). This may raise
             # max_iterations, granting one more attempt after this failure.
-            if failure_kind == "budget_exhausted":
+            if failure_kind in ("budget_exhausted", "schema_echo"):
                 # Truncation is not an ordinary format mistake: a same-cap format
-                # retry would only hit the budget again, and replaying the
-                # truncated output just grows the prompt. Fail fast with the
-                # dedicated error recorded by _call_llm().
+                # retry would only hit the budget again (a schema echo repeats the
+                # same contract), and replaying the truncated output just grows
+                # the prompt. Fail fast with the dedicated error from _call_llm().
                 raise RuntimeError(
                     f"Memory extraction aborted: {parse_error or failure_kind}"
                 )
@@ -492,8 +492,13 @@ class ExtractLoop:
             configured if configured is not None else _DEFAULT_EXTRACTION_MAX_OUTPUT_TOKENS
         )
 
-    def _budget_exhausted_error(self, response: Any, content: str) -> str:
+    def _budget_exhausted_error(
+        self, response: Any, content: str, cause: Optional[str] = None
+    ) -> str:
         """Build the dedicated, actionable error for a truncated response.
+
+        ``cause`` replaces the budget advice when the protocol recognizes why
+        the output ran away (e.g. a schema echo).
 
         Truncation is detected only from the backend's explicit
         ``finish_reason == "length"``; token counters are never used to infer it.
@@ -505,10 +510,12 @@ class ExtractLoop:
         )
         if completion_tokens:
             details += f", completion_tokens={completion_tokens}"
+        advice = cause or (
+            "Raise vlm.max_tokens in ov.conf or reduce the memory context before retrying."
+        )
         return (
             "Response was cut off by the output-token budget "
-            f"({details}), response_preview={_preview_text(content)!r}. "
-            "Raise vlm.max_tokens in ov.conf or reduce the memory context before retrying."
+            f"({details}), response_preview={_preview_text(content)!r}. {advice}"
         )
 
     def _retryable_resolution_issues(self, operations: ResolvedOperations) -> List[Dict[str, Any]]:
@@ -1275,13 +1282,16 @@ class ExtractLoop:
         # run() treats budget_exhausted as terminal, without a format retry.
         if getattr(response, "finish_reason", None) == "length":
             content = getattr(response, "content", None) or ""
-            self._last_llm_failure_kind = "budget_exhausted"
+            cause = self._output_protocol.describe_truncated_output(
+                VLMBase._clean_response(content)
+            )
+            self._last_llm_failure_kind = "schema_echo" if cause else "budget_exhausted"
             self._last_llm_failure_content = content
-            self._last_parse_error = self._budget_exhausted_error(response, content)
+            self._last_parse_error = self._budget_exhausted_error(response, content, cause)
             tracer.set("memory.extraction.parse_error", self._last_parse_error)
             logger.debug(
                 "Response truncated by output-token budget "
-                f"failure_kind=budget_exhausted error={self._last_parse_error}"
+                f"failure_kind={self._last_llm_failure_kind} error={self._last_parse_error}"
             )
             return (None, None)
 

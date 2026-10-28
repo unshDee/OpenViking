@@ -94,6 +94,11 @@ class ExtractionOutputProtocol(ABC):
     def render_format_retry(self, error: str | None = None) -> str:
         """Render guidance after output parsing fails."""
 
+    def describe_truncated_output(self, content: str) -> str | None:
+        """Explain a truncated response caused by a protocol mistake, not by the budget."""
+        del content
+        return None
+
     @abstractmethod
     def render_patch_repair(self, patch_errors: list[dict[str, Any]]) -> str:
         """Render guidance after a patch cannot be applied."""
